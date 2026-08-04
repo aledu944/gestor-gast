@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum NotificationKind {
+  DUE_SOON
+  MONTHLY_DIGEST
+}
+
+model Category {
+  id                String             @id @default(cuid())
+  name              String
+  normalizedName    String             @unique
+  icon              String             @default("Shapes")
+  color             String             @default("#5B5BD6")
+  expenses          Expense[]
+  recurringExpenses RecurringExpense[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+}
+
+model RecurringExpense {
+  id          String     @id @default(cuid())
+  name        String
+  amountMinor Int
+  currency    String     @db.VarChar(3)
+  dueDay      Int
+  startsOn    DateTime   @db.Date
+  endsOn      DateTime?  @db.Date
+  notes       String?
+  active      Boolean    @default(true)
+  categoryId  String?
+  category    Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  expenses    Expense[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([active, startsOn, endsOn])
+}
+
+model Expense {
+  id                   String             @id @default(cuid())
+  name                 String
+  amountMinor          Int
+  currency             String             @db.VarChar(3)
+  dueDate              DateTime           @db.Date
+  paidAt               DateTime?
+  notes                String?
+  period               DateTime?          @db.Date
+  categoryId           String?
+  category             Category?          @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  recurringExpenseId   String?
+  recurringExpense     RecurringExpense?  @relation(fields: [recurringExpenseId], references: [id], onDelete: Cascade)
+  notificationDelivery NotificationDelivery[]
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@unique([recurringExpenseId, period])
+  @@index([dueDate, paidAt])
+  @@index([categoryId])
+}
+
+model AppSettings {
+  id                   String   @id @default("default")
+  defaultCurrency      String   @default("BOB") @db.VarChar(3)
+  timeZone             String   @default("America/La_Paz")
+  dueReminderDays      Int      @default(3)
+  monthlyDigestEnabled Boolean  @default(true)
+  reminderHour         Int      @default(9)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model PushSubscription {
+  id         String                 @id @default(cuid())
+  endpoint   String                 @unique @db.Text
+  p256dh     String                 @db.Text
+  auth       String                 @db.Text
+  userAgent  String?
+  enabled    Boolean                @default(true)
+  lastSeenAt DateTime               @default(now())
+  deliveries NotificationDelivery[]
+  createdAt  DateTime               @default(now())
+  updatedAt  DateTime               @updatedAt
+}
+
+model NotificationDelivery {
+  id             String            @id @default(cuid())
+  kind           NotificationKind
+  referenceKey   String
+  subscriptionId String
+  subscription   PushSubscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  expenseId      String?
+  expense        Expense?          @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  sentAt         DateTime           @default(now())
+
+  @@unique([subscriptionId, referenceKey])
+  @@index([expenseId])
+}
