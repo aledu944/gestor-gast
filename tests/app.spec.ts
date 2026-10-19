@@ -75,6 +75,11 @@ test('the last dashboard snapshot remains consultable offline', async ({ page, c
   await expect(page.getByRole('heading', { name: 'Hola, este es tu pulso.' })).toBeVisible()
 
   await context.setOffline(true)
+  // Chromium keeps navigator.onLine === true for documents served by a service worker while
+  // network emulation is offline, so mirror what a real offline browser reports.
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'onLine', { get: () => false })
+  })
   try {
     await page.reload({ waitUntil: 'domcontentloaded' })
     await expect(page.getByRole('heading', { name: 'Hola, este es tu pulso.' })).toBeVisible({ timeout: 15_000 })
