@@ -21,6 +21,7 @@ import {
   getBootstrapData,
   getDashboardData,
   getExpensesData,
+  invalidateMaterialized,
   saveCategoryData,
   savePushSubscriptionData,
   setPaymentData,
@@ -42,15 +43,27 @@ export const getBootstrap = createServerFn({ method: 'GET' }).handler(() =>
 
 export const createExpense = createServerFn({ method: 'POST' })
   .validator(expenseInputSchema)
-  .handler(({ data }) => createExpenseData(data))
+  .handler(async ({ data }) => {
+    const result = await createExpenseData(data)
+    invalidateMaterialized()
+    return result
+  })
 
 export const updateExpense = createServerFn({ method: 'POST' })
   .validator(updateExpenseInputSchema)
-  .handler(({ data }) => updateExpenseData(data))
+  .handler(async ({ data }) => {
+    const result = await updateExpenseData(data)
+    invalidateMaterialized()
+    return result
+  })
 
 export const deleteExpense = createServerFn({ method: 'POST' })
   .validator(deleteExpenseInputSchema)
-  .handler(({ data }) => deleteExpenseData(data))
+  .handler(async ({ data }) => {
+    const result = await deleteExpenseData(data)
+    invalidateMaterialized()
+    return result
+  })
 
 export const setExpensePayment = createServerFn({ method: 'POST' })
   .validator(paymentInputSchema)

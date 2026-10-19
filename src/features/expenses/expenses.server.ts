@@ -69,16 +69,32 @@ function serializeSettings(settings: {
 }
 
 export async function ensureSettings() {
-  return getPrisma().appSettings.upsert({
+  const prisma = getPrisma()
+  const existing = await prisma.appSettings.findUnique({ where: { id: 'default' } })
+  if (existing) return existing
+  return prisma.appSettings.upsert({
     where: { id: 'default' },
     update: {},
     create: { id: 'default' },
   })
 }
 
+// Months already expanded from recurring series, with the time they were checked.
+// Avoids re-running the expansion on every read; cleared whenever a series changes.
+const MATERIALIZE_TTL_MS = 10 * 60_000
+const materializedMonths = new Map<string, number>()
+
+export function invalidateMaterialized() {
+  materializedMonths.clear()
+}
+
 export async function materializeMonth(monthValue: string) {
+  const key = normalizeMonth(monthValue)
+  const checkedAt = materializedMonths.get(key)
+  if (checkedAt && Date.now() - checkedAt < MATERIALIZE_TTL_MS) return
+
   const prisma = getPrisma()
-  const month = monthStart(normalizeMonth(monthValue))
+  const month = monthStart(key)
   const nextMonth = addMonths(month, 1)
   const series = await prisma.recurringExpense.findMany({
     where: {
@@ -88,29 +104,22 @@ export async function materializeMonth(monthValue: string) {
     },
   })
 
-  await Promise.all(
-    series.map((item) =>
-      prisma.expense.upsert({
-        where: {
-          recurringExpenseId_period: {
-            recurringExpenseId: item.id,
-            period: month,
-          },
-        },
-        update: {},
-        create: {
-          name: item.name,
-          amountMinor: item.amountMinor,
-          currency: item.currency,
-          dueDate: dateForDay(month, item.dueDay),
-          period: month,
-          notes: item.notes,
-          categoryId: item.categoryId,
-          recurringExpenseId: item.id,
-        },
-      }),
-    ),
-  )
+  if (series.length) {
+    await prisma.expense.createMany({
+      data: series.map((item) => ({
+        name: item.name,
+        amountMinor: item.amountMinor,
+        currency: item.currency,
+        dueDate: dateForDay(month, item.dueDay),
+        period: month,
+        notes: item.notes,
+        categoryId: item.categoryId,
+        recurringExpenseId: item.id,
+      })),
+      skipDuplicates: true,
+    })
+  }
+  materializedMonths.set(key, Date.now())
 }
 
 export async function getDashboardData(monthValue: string): Promise<DashboardSnapshot> {
@@ -120,11 +129,9 @@ export async function getDashboardData(monthValue: string): Promise<DashboardSna
   const today = todayInTimeZone(settings.timeZone)
   const currentMonth = monthKey(today)
 
-  await Promise.all([
-    materializeMonth(month),
-    materializeMonth(currentMonth),
-    materializeMonth(monthKey(addMonths(today, 1))),
-  ])
+  await Promise.all(
+    [...new Set([month, currentMonth, monthKey(addMonths(today, 1))])].map(materializeMonth),
+  )
 
   const { start, end } = monthBounds(month)
   const upcomingEnd = new Date(today)
@@ -208,8 +215,7 @@ export async function getExpensesData(input: {
 }) {
   const prisma = getPrisma()
   const month = normalizeMonth(input.month)
-  await materializeMonth(month)
-  const settings = await ensureSettings()
+  const [settings] = await Promise.all([ensureSettings(), materializeMonth(month)])
   const today = todayInTimeZone(settings.timeZone)
   const { start, end } = monthBounds(month)
 
