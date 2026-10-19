@@ -1,6 +1,5 @@
 import { Bell, BellOff, Check, Download, RefreshCw, Share2, Smartphone } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useRegisterSW } from 'virtual:pwa-register/react'
 
 import {
   disablePushSubscription,
@@ -8,6 +7,7 @@ import {
   savePushSubscription,
 } from '#/features/expenses/expenses.functions'
 import { useOnline } from '#/hooks/use-online'
+import { usePwaRegistration } from './pwa-registration'
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>
@@ -32,7 +32,7 @@ export function PwaManager() {
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
-  } = useRegisterSW()
+  } = usePwaRegistration()
 
   useEffect(() => {
     const media = window.matchMedia('(display-mode: standalone)')
