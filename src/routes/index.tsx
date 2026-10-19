@@ -1,13 +1,17 @@
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { ArrowRight, CalendarClock, CheckCircle2, CloudOff, Plus, ReceiptText, Wallet } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
-import { ExpenseDialog } from '#/components/expense-dialog'
+import { useQuickAdd } from '#/components/app-shell'
 import { ExpenseRow } from '#/components/expense-row'
+import { Money } from '#/components/money'
+import { MonthSwitcher } from '#/components/month-switcher'
 import { bootstrapQueryOptions, dashboardQueryOptions } from '#/features/expenses/queries'
 import type { DashboardSnapshot } from '#/features/expenses/types'
 import { formatMoney, monthLabel, normalizeMonth } from '#/lib/finance'
 import { cacheDashboard, readCachedDashboard } from '#/lib/offline-cache'
+import { useOnline } from '#/hooks/use-online'
 
 const dashboardSearch = (search: Record<string, unknown>): {
   month: string
@@ -25,11 +29,10 @@ export const Route = createFileRoute('/')({
   validateSearch: dashboardSearch,
   loaderDeps: ({ search }) => ({ month: search.month }),
   loader: async ({ context, deps }) => {
-    const [dashboard, bootstrap] = await Promise.all([
-      context.queryClient.fetchQuery(dashboardQueryOptions(deps.month)),
-      context.queryClient.fetchQuery(bootstrapQueryOptions()),
+    await Promise.all([
+      context.queryClient.ensureQueryData(dashboardQueryOptions(deps.month)),
+      context.queryClient.ensureQueryData(bootstrapQueryOptions()),
     ])
-    return { dashboard, bootstrap }
   },
   pendingComponent: DashboardSkeleton,
   errorComponent: OfflineDashboard,
@@ -37,44 +40,49 @@ export const Route = createFileRoute('/')({
 })
 
 function DashboardPage() {
-  const { dashboard, bootstrap } = Route.useLoaderData()
-  const { action } = Route.useSearch()
+  const { month, action } = Route.useSearch()
+  const { data: dashboard } = useSuspenseQuery(dashboardQueryOptions(month))
+  const { data: bootstrap } = useSuspenseQuery(bootstrapQueryOptions())
+  const online = useOnline()
+  const quickAdd = useQuickAdd()
   const navigate = useNavigate({ from: '/' })
-  const [dialog, setDialog] = useState<'pending' | 'paid' | null>(action ?? null)
 
   useEffect(() => {
     void cacheDashboard(dashboard)
   }, [dashboard])
 
+  // Manifest shortcuts open the flow once, then clean the URL.
+  useEffect(() => {
+    if (!action) return
+    quickAdd.open(action)
+    void navigate({ search: (previous) => ({ month: previous.month }), replace: true })
+  }, [action, navigate, quickAdd])
+
   return (
     <div className="page dashboard-page">
+      {!online && (
+        <div className="offline-notice" role="status">
+          <CloudOff size={18} />
+          Modo sin conexión · última sincronización {new Date(dashboard.syncedAt).toLocaleString('es-BO')}.
+        </div>
+      )}
       <section className="page-heading dashboard-heading">
         <div>
           <span className="eyebrow">Tu mes, en claro</span>
           <h1>Hola, este es tu pulso.</h1>
-          <p>Lo que ya resolviste y lo que viene después.</p>
         </div>
-        <label className="month-control">
-          <span>Período</span>
-          <input
-            type="month"
-            value={dashboard.month}
-            onChange={(event) =>
-              navigate({ search: (previous) => ({ ...previous, month: event.target.value }) })
-            }
-          />
-        </label>
+        <MonthSwitcher month={dashboard.month} onChange={(next) => navigate({ search: (previous) => ({ ...previous, month: next }) })} />
       </section>
 
       <PulseCard snapshot={dashboard} />
 
       <div className="quick-actions" aria-label="Acciones rápidas">
-        <button className="quick-action primary-action" onClick={() => setDialog('pending')}>
-          <span><Plus size={20} /></span>
+        <button type="button" className="quick-action" onClick={() => quickAdd.open('pending')} disabled={!online}>
+          <span><Plus size={19} /></span>
           <span><strong>Añadir pendiente</strong><small>Programa un próximo pago</small></span>
         </button>
-        <button className="quick-action" onClick={() => setDialog('paid')}>
-          <span><CheckCircle2 size={20} /></span>
+        <button type="button" className="quick-action" onClick={() => quickAdd.open('paid')} disabled={!online}>
+          <span><CheckCircle2 size={19} /></span>
           <span><strong>Registrar pago</strong><small>Cierra uno o anota un gasto</small></span>
         </button>
       </div>
@@ -120,42 +128,52 @@ function DashboardPage() {
           <EmptyState icon={<Wallet />} title="Tu mes empieza limpio" copy="Añade el primer gasto para ver cómo cambia tu pulso." />
         )}
       </section>
-
-      {dialog && (
-        <ExpenseDialog
-          mode={dialog}
-          categories={bootstrap.categories}
-          pendingExpenses={[...dashboard.overdue, ...dashboard.upcoming]}
-          onClose={() => setDialog(null)}
-        />
-      )}
     </div>
   )
 }
+
+const WEEKS = ['1-7', '8-14', '15-21', '22-28', '29-31'] as const
 
 function PulseCard({ snapshot }: { snapshot: DashboardSnapshot }) {
   const totals = snapshot.totals[0] ?? { currency: 'BOB', committed: 0, paid: 0, pending: 0 }
   const additionalTotals = snapshot.totals.slice(1)
   const paidPercent = totals.committed ? Math.round((totals.paid / totals.committed) * 100) : 0
-  const markers = useMemo(() => snapshot.expenses.map((expense) => ({
-    id: expense.id,
-    left: `${Math.min(97, Math.max(3, (Number(expense.dueDate.slice(8, 10)) / 31) * 100))}%`,
-    paid: Boolean(expense.paidAt),
-    label: expense.name,
-  })), [snapshot.expenses])
+
+  const weeks = useMemo(() => {
+    const buckets = WEEKS.map((label) => ({ label, paid: 0, pending: 0 }))
+    for (const expense of snapshot.expenses) {
+      if (expense.currency !== totals.currency) continue
+      const bucket = buckets[Math.min(4, Math.floor((Number(expense.dueDate.slice(8, 10)) - 1) / 7))]
+      if (expense.paidAt) bucket.paid += expense.amountMinor
+      else bucket.pending += expense.amountMinor
+    }
+    const peak = Math.max(1, ...buckets.map((bucket) => bucket.paid + bucket.pending))
+    return buckets.map((bucket) => ({ ...bucket, total: bucket.paid + bucket.pending, peak }))
+  }, [snapshot.expenses, totals.currency])
 
   return (
     <section className="pulse-card" aria-label={`Pulso de ${monthLabel(snapshot.month)}`}>
-      <div className="pulse-topline"><span>Pulso de {monthLabel(snapshot.month)}</span><strong>{paidPercent}% resuelto</strong></div>
-      <div className="pulse-amount"><span>Comprometido</span><strong>{formatMoney(totals.committed, totals.currency)}</strong></div>
-      <div className="pulse-track" role="img" aria-label={`${formatMoney(totals.paid, totals.currency)} pagado de ${formatMoney(totals.committed, totals.currency)}`}>
-        <div className="pulse-paid" style={{ width: `${paidPercent}%` }} />
-        {markers.map((marker) => <i key={marker.id} className={marker.paid ? 'is-paid' : ''} style={{ left: marker.left }} title={marker.label} />)}
+      <div className="pulse-topline"><span>Por pagar · {monthLabel(snapshot.month)}</span><strong>{paidPercent}% resuelto</strong></div>
+      <Money className="pulse-amount" amountMinor={totals.pending} currency={totals.currency} />
+      <div className="pulse-stats">
+        <div><span>Comprometido</span><strong>{formatMoney(totals.committed, totals.currency)}</strong></div>
+        <div><span>Pagado</span><strong className="is-paid">{formatMoney(totals.paid, totals.currency)}</strong></div>
       </div>
-      <div className="pulse-legend">
-        <div><span className="legend-dot paid" /><span>Pagado<strong>{formatMoney(totals.paid, totals.currency)}</strong></span></div>
-        <div><span className="legend-dot pending" /><span>Pendiente<strong>{formatMoney(totals.pending, totals.currency)}</strong></span></div>
+
+      <div className="rhythm" role="img" aria-label={`Ritmo del mes por semana: ${weeks.map((week) => `${week.label}: ${formatMoney(week.total, totals.currency)}`).join(', ')}`}>
+        {weeks.map((week) => (
+          <div className="rhythm-col" key={week.label}>
+            <div className="rhythm-bar">
+              <span className="rhythm-fill" style={{ height: `${(week.total / week.peak) * 100}%` }}>
+                {week.pending > 0 && <i className="rhythm-pending" style={{ flexGrow: week.pending }} />}
+                {week.paid > 0 && <i className="rhythm-paid" style={{ flexGrow: week.paid }} />}
+              </span>
+            </div>
+            <small>{week.label}</small>
+          </div>
+        ))}
       </div>
+
       {additionalTotals.length > 0 && (
         <div className="pulse-currency-breakdown" aria-label="Totales en otras monedas">
           {additionalTotals.map((item) => (

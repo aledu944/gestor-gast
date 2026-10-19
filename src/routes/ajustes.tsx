@@ -1,26 +1,24 @@
-import { createFileRoute, useRouter } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
-import { BellRing, Globe2, Palette, ShieldAlert } from 'lucide-react'
+import { useSuspenseQuery } from '@tanstack/react-query'
+import { createFileRoute } from '@tanstack/react-router'
+import { BellRing, Globe2, ShieldAlert } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 
 import { PwaManager } from '#/components/pwa-manager'
-import { ThemeControl } from '#/components/theme-control'
-import { updateSettings } from '#/features/expenses/expenses.functions'
-import { bootstrapQueryOptions, invalidateExpenseQueries } from '#/features/expenses/queries'
+import { useUpdateSettings } from '#/features/expenses/mutations'
+import { bootstrapQueryOptions } from '#/features/expenses/queries'
 import { useOnline } from '#/hooks/use-online'
 
 export const Route = createFileRoute('/ajustes')({
-  loader: ({ context }) => context.queryClient.fetchQuery(bootstrapQueryOptions()),
+  loader: ({ context }) => context.queryClient.ensureQueryData(bootstrapQueryOptions()),
   component: SettingsPage,
 })
 
 function SettingsPage() {
-  const { settings } = Route.useLoaderData()
-  const router = useRouter()
-  const queryClient = useQueryClient()
+  const { data: { settings } } = useSuspenseQuery(bootstrapQueryOptions())
   const online = useOnline()
-  const [saving, setSaving] = useState(false)
+  const save = useUpdateSettings()
+  const saving = save.isPending
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
 
@@ -28,31 +26,25 @@ function SettingsPage() {
     event.preventDefault()
     if (!online) return
     const form = new FormData(event.currentTarget)
-    setSaving(true)
     setSaved(false)
     setError('')
     try {
-      await updateSettings({ data: {
+      await save.mutateAsync({
         defaultCurrency: String(form.get('currency')),
         timeZone: String(form.get('timeZone')),
         dueReminderDays: Number(form.get('dueReminderDays')),
         reminderHour: Number(form.get('reminderHour')),
         monthlyDigestEnabled: form.get('monthlyDigestEnabled') === 'on',
-      } })
-      await invalidateExpenseQueries(queryClient)
-      await router.invalidate({ sync: true })
+      })
       setSaved(true)
     } catch {
       setError('No se pudieron guardar las preferencias.')
-    } finally {
-      setSaving(false)
     }
   }
 
   return <div className="page settings-page">
-    <section className="page-heading"><div><span className="eyebrow">Preferencias</span><h1>Ajustes</h1><p>Configura cómo se ve, se instala y te recuerda la aplicación.</p></div></section>
+    <section className="page-heading"><div><span className="eyebrow">Preferencias</span><h1>Ajustes</h1><p>Configura cómo se instala y te recuerda la aplicación.</p></div></section>
     <div className="settings-grid">
-      <section className="panel settings-panel"><header className="settings-section-title"><Palette size={20} /><div><h2>Apariencia</h2><p>El tema se guarda solo en este dispositivo.</p></div></header><ThemeControl /></section>
       <section className="panel settings-panel wide-setting"><header className="settings-section-title"><BellRing size={20} /><div><h2>Aplicación y avisos</h2><p>Instala la PWA y elige si este dispositivo recibe recordatorios.</p></div></header><PwaManager /></section>
       <section className="panel settings-panel"><header className="settings-section-title"><Globe2 size={20} /><div><h2>Formato y horario</h2><p>Los registros antiguos conservan su moneda.</p></div></header><form className="settings-form" onSubmit={submit}>
         <label><span>Moneda predeterminada</span><select name="currency" defaultValue={settings.defaultCurrency}><option value="BOB">BOB · Boliviano</option><option value="USD">USD · Dólar</option><option value="EUR">EUR · Euro</option></select></label>

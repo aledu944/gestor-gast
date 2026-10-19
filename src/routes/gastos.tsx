@@ -1,11 +1,14 @@
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { Filter, Plus, Search, WalletCards } from 'lucide-react'
-import { useState } from 'react'
+import { Plus, Search, WalletCards, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 
-import { ExpenseDialog } from '#/components/expense-dialog'
+import { useQuickAdd } from '#/components/app-shell'
 import { ExpenseRow } from '#/components/expense-row'
+import { MonthSwitcher } from '#/components/month-switcher'
 import { bootstrapQueryOptions, expensesQueryOptions } from '#/features/expenses/queries'
 import { monthLabel, normalizeMonth } from '#/lib/finance'
+import { useOnline } from '#/hooks/use-online'
 
 const expenseSearch = (search: Record<string, unknown>) => ({
   month: normalizeMonth(typeof search.month === 'string' ? search.month : undefined),
@@ -19,6 +22,13 @@ const expenseSearch = (search: Record<string, unknown>) => ({
     : 'due-asc' as const,
 })
 
+const statusChips = [
+  ['all', 'Todos'],
+  ['pending', 'Pendientes'],
+  ['overdue', 'Atrasados'],
+  ['paid', 'Pagados'],
+] as const
+
 export const Route = createFileRoute('/gastos')({
   validateSearch: expenseSearch,
   loaderDeps: ({ search }) => ({
@@ -29,48 +39,65 @@ export const Route = createFileRoute('/gastos')({
     sort: search.sort,
   }),
   loader: async ({ context, deps }) => {
-    const [expenses, bootstrap] = await Promise.all([
-      context.queryClient.fetchQuery(expensesQueryOptions(deps)),
-      context.queryClient.fetchQuery(bootstrapQueryOptions()),
+    await Promise.all([
+      context.queryClient.ensureQueryData(expensesQueryOptions(deps)),
+      context.queryClient.ensureQueryData(bootstrapQueryOptions()),
     ])
-    return { expenses, bootstrap }
   },
   component: ExpensesPage,
 })
 
 function ExpensesPage() {
-  const { expenses, bootstrap } = Route.useLoaderData()
   const search = Route.useSearch()
+  const { data: bootstrap } = useSuspenseQuery(bootstrapQueryOptions())
+  const { data: expenses = [], isPlaceholderData } = useQuery(expensesQueryOptions(search))
   const navigate = useNavigate({ from: '/gastos' })
-  const [dialog, setDialog] = useState<'pending' | 'paid' | null>(null)
+  const online = useOnline()
+  const quickAdd = useQuickAdd()
+  const [text, setText] = useState(search.query)
 
   const update = (values: Partial<typeof search>) =>
-    navigate({ search: (previous) => ({ ...previous, ...values }) })
+    navigate({ search: (previous) => ({ ...previous, ...values }), replace: true })
+
+  // Search runs on the server, so wait for a pause in typing instead of querying per keystroke.
+  useEffect(() => {
+    if (text === search.query) return
+    const timer = window.setTimeout(() => void update({ query: text }), 350)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text])
+
+  useEffect(() => { setText(search.query) }, [search.query])
 
   return (
     <div className="page expenses-page">
       <section className="page-heading split-heading">
-        <div><span className="eyebrow">Historial y agenda</span><h1>Todos tus gastos</h1><p>Busca, filtra y resuelve cada movimiento desde un solo lugar.</p></div>
-        <div className="heading-actions">
-          <button className="button secondary" onClick={() => setDialog('paid')}>Registrar pago</button>
-          <button className="button primary" onClick={() => setDialog('pending')}><Plus size={17} />Añadir pendiente</button>
+        <div><span className="eyebrow">Historial y agenda</span><h1>Todos tus gastos</h1></div>
+        <MonthSwitcher month={search.month} onChange={(month) => void update({ month })} />
+      </section>
+
+      <section className="filters" aria-label="Filtros de gastos">
+        <label className="search-control">
+          <Search size={17} aria-hidden="true" />
+          <span className="sr-only">Buscar por nombre</span>
+          <input type="search" value={text} onChange={(event) => setText(event.target.value)} placeholder="Buscar por nombre" enterKeyHint="search" />
+          {text && <button type="button" className="icon-button subtle" onClick={() => { setText(''); void update({ query: '' }) }} aria-label="Borrar búsqueda"><X size={15} /></button>}
+        </label>
+        <div className="chip-row scroll-row" role="group" aria-label="Estado">
+          {statusChips.map(([value, label]) => (
+            <button key={value} type="button" className={`chip-button${search.status === value ? ' is-selected' : ''}`} aria-pressed={search.status === value} onClick={() => void update({ status: value })}>{label}</button>
+          ))}
+        </div>
+        <div className="filter-selects">
+          <label><span className="sr-only">Categoría</span><select value={search.category} onChange={(event) => void update({ category: event.target.value })}><option value="all">Todas las categorías</option>{bootstrap.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+          <label><span className="sr-only">Ordenar</span><select value={search.sort} onChange={(event) => void update({ sort: event.target.value as typeof search.sort })}><option value="due-asc">Vencimiento próximo</option><option value="due-desc">Vencimiento lejano</option><option value="amount-desc">Mayor monto</option></select></label>
         </div>
       </section>
 
-      <section className="filter-bar" aria-label="Filtros de gastos">
-        <label className="search-control"><Search size={17} /><input value={search.query} onChange={(event) => update({ query: event.target.value })} placeholder="Buscar por nombre" /></label>
-        <label><span className="sr-only">Mes</span><input type="month" value={search.month} onChange={(event) => update({ month: event.target.value })} /></label>
-        <label><Filter size={16} /><span className="sr-only">Estado</span><select value={search.status} onChange={(event) => update({ status: event.target.value as typeof search.status })}><option value="all">Todos</option><option value="pending">Pendientes</option><option value="paid">Pagados</option><option value="overdue">Atrasados</option></select></label>
-        <label><span className="sr-only">Categoría</span><select value={search.category} onChange={(event) => update({ category: event.target.value })}><option value="all">Todas las categorías</option>{bootstrap.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
-        <label><span className="sr-only">Ordenar</span><select value={search.sort} onChange={(event) => update({ sort: event.target.value as typeof search.sort })}><option value="due-asc">Vencimiento próximo</option><option value="due-desc">Vencimiento lejano</option><option value="amount-desc">Mayor monto</option></select></label>
-      </section>
-
-      <section className="panel records-panel">
+      <section className={`panel records-panel${isPlaceholderData ? ' is-refreshing' : ''}`} aria-busy={isPlaceholderData}>
         <header className="panel-header"><div><span className="eyebrow">{monthLabel(search.month)}</span><h2>{expenses.length} {expenses.length === 1 ? 'movimiento' : 'movimientos'}</h2></div></header>
-        {expenses.length ? <div className="expense-list">{expenses.map((expense) => <ExpenseRow key={expense.id} expense={expense} categories={bootstrap.categories} />)}</div> : <div className="empty-state large"><span><WalletCards /></span><strong>No encontramos gastos</strong><p>Prueba otro filtro o registra un movimiento para este mes.</p><button className="button primary" onClick={() => setDialog('pending')}><Plus size={17} />Añadir gasto</button></div>}
+        {expenses.length ? <div className="expense-list">{expenses.map((expense) => <ExpenseRow key={expense.id} expense={expense} categories={bootstrap.categories} />)}</div> : <div className="empty-state large"><span><WalletCards /></span><strong>No encontramos gastos</strong><p>Prueba otro filtro o registra un movimiento para este mes.</p><button type="button" className="button primary" onClick={() => quickAdd.open('pending')} disabled={!online}><Plus size={17} />Añadir gasto</button></div>}
       </section>
-
-      {dialog && <ExpenseDialog mode={dialog} categories={bootstrap.categories} pendingExpenses={expenses.filter((expense) => !expense.paidAt)} onClose={() => setDialog(null)} />}
     </div>
   )
 }

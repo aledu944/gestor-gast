@@ -31,8 +31,8 @@ const config = defineConfig({
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        background_color: '#F6F7FA',
-        theme_color: '#5B5BD6',
+        background_color: '#110B08',
+        theme_color: '#110B08',
         orientation: 'portrait-primary',
         categories: ['finance', 'productivity'],
         icons: [

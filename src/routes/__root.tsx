@@ -8,6 +8,7 @@ import { TanStackDevtools } from '@tanstack/react-devtools'
 
 import TanStackQueryDevtools from '../integrations/tanstack-query/devtools'
 import { AppShell } from '../components/app-shell'
+import { PwaRegistrationProvider } from '../components/pwa-registration'
 
 import appCss from '../styles.css?url'
 
@@ -25,13 +26,15 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
       },
       {
         name: 'viewport',
-        content: 'width=device-width, initial-scale=1',
+        content: 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content',
       },
       {
         title: 'Gestor Gast · Tu pulso de gastos',
       },
       { name: 'description', content: 'Organiza gastos mensuales, pagos pendientes y categorías desde cualquier dispositivo.' },
-      { name: 'theme-color', content: '#5B5BD6' },
+      { name: 'theme-color', content: '#110B08' },
+      { name: 'color-scheme', content: 'dark' },
+      { name: 'mobile-web-app-capable', content: 'yes' },
       { name: 'apple-mobile-web-app-capable', content: 'yes' },
       { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
     ],
@@ -43,23 +46,20 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
       { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
       { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
     ],
-    scripts: [
-      {
-        children: `(function(){try{var t=localStorage.getItem('gestor-gast-theme')||'system';var d=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})()`,
-      },
-    ],
   }),
   shellComponent: RootDocument,
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" suppressHydrationWarning>
+    <html lang="es" className="dark" style={{ colorScheme: 'dark' }}>
       <head>
         <HeadContent />
       </head>
       <body>
-        <AppShell>{children}</AppShell>
+        <PwaRegistrationProvider>
+          <AppShell>{children}</AppShell>
+        </PwaRegistrationProvider>
         <TanStackDevtools
           config={{
             position: 'bottom-right',
